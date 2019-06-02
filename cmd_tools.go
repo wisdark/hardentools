@@ -17,16 +17,16 @@
 package main
 
 import (
-	"golang.org/x/sys/windows/registry"
+	"os/exec"
+	"syscall"
 )
 
-// UAC contains the registry keys to be hardened
-var UAC = &RegistrySingleValueDWORD{
-	RootKey:         registry.LOCAL_MACHINE,
-	Path:            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
-	ValueName:       "ConsentPromptBehaviorAdmin",
-	HardenedValue:   2,
-	shortName:       "UAC",
-	longName:        "UAC Prompt",
-	hardenByDefault: true,
+// helper method for executing cmd commands (does not open cmd window)
+func executeCommand(cmd string, args ...string) (string, error) {
+	var out []byte
+	command := exec.Command(cmd, args...)
+	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := command.CombinedOutput()
+
+	return string(out), err
 }

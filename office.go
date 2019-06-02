@@ -1,5 +1,5 @@
 // Hardentools
-// Copyright (C) 2017  Security Without Borders
+// Copyright (C) 2017-2018  Security Without Borders
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -18,120 +18,102 @@ package main
 
 import (
 	"fmt"
+
 	"golang.org/x/sys/windows/registry"
 )
 
-var officeVersions = []string{
+// available office versions
+var standardOfficeVersions = []string{
 	"12.0", // Office 2007
 	"14.0", // Office 2010
 	"15.0", // Office 2013
 	"16.0", // Office 2016
 }
 
+// standard office apps that are hardened
 var standardOfficeApps = []string{"Excel", "PowerPoint", "Word"}
 
-func _hardenOffice(pathRegEx string, valueName string, value uint32, officeApps []string) {
-	for _, officeVersion := range officeVersions {
-		for _, officeApp := range officeApps {
-			path := fmt.Sprintf(pathRegEx, officeVersion, officeApp)
-			key, _, _ := registry.CreateKey(registry.CURRENT_USER, path, registry.ALL_ACCESS)
-			// Save current state.
-			saveOriginalRegistryDWORD(key, path, valueName)
-			// Harden.
-			key.SetDWordValue(valueName, value)
-			key.Close()
-		}
-	}
+// OfficeRegistryRegExSingleDWORD is the data type for a RegEx Path / Single Value DWORD combination
+type OfficeRegistryRegExSingleDWORD struct {
+	RootKey         registry.Key
+	PathRegEx       string
+	ValueName       string
+	HardenedValue   uint32
+	OfficeApps      []string
+	OfficeVersions  []string
+	shortName       string
+	longName        string
+	description     string
+	hardenByDefault bool
 }
 
-func _restoreOffice(pathRegEx string, valueName string, officeApps []string) {
-	for _, officeVersion := range officeVersions {
-		for _, officeApp := range officeApps {
-			path := fmt.Sprintf(pathRegEx, officeVersion, officeApp)
-			key, _ := registry.OpenKey(registry.CURRENT_USER, path, registry.ALL_ACCESS)
-			// restore previous state
-			restoreKey(key, path, valueName)
-			key.Close()
-		}
-	}
-}
-
-// Office Packager Objects
-
+// OfficeOLE hardens Office Packager Objects
 // 0 - No prompt from Office when user clicks, object executes
 // 1 - Prompt from Office when user clicks, object executes
 // 2 - No prompt, Object does not execute
-
-func triggerOfficeOLE(harden bool) {
-	var valueName = "PackagerPrompt"
-	var pathRegEx = "SOFTWARE\\Microsoft\\Office\\%s\\%s\\Security"
-
-	if harden == false {
-		events.AppendText("Restoring original settings for Office Packager Objects\n")
-
-		_restoreOffice(pathRegEx, valueName, standardOfficeApps)
-	} else {
-		events.AppendText("Hardening by disabling Office Packager Objects\n")
-		var value uint32 = 2
-
-		_hardenOffice(pathRegEx, valueName, value, standardOfficeApps)
-	}
+var OfficeOLE = &OfficeRegistryRegExSingleDWORD{
+	RootKey:         registry.CURRENT_USER,
+	PathRegEx:       "SOFTWARE\\Microsoft\\Office\\%s\\%s\\Security",
+	ValueName:       "PackagerPrompt",
+	HardenedValue:   2,
+	OfficeApps:      standardOfficeApps,
+	OfficeVersions:  standardOfficeVersions,
+	shortName:       "OfficeOLE",
+	longName:        "Office Packager Objects (OLE)",
+	hardenByDefault: true,
 }
 
-// Office Macros
-
+// OfficeMacros contains Macro registry keys
 // 1 - Enable all
 // 2 - Disable with notification
 // 3 - Digitally signed only
 // 4 - Disable all
-
-func triggerOfficeMacros(harden bool) {
-	var value uint32
-	var valueName = "VBAWarnings"
-	var pathRegEx = "SOFTWARE\\Microsoft\\Office\\%s\\%s\\Security"
-
-	if harden == true {
-		events.AppendText("Hardening by disabling Office Macros\n")
-		value = 4
-
-		_hardenOffice(pathRegEx, valueName, value, standardOfficeApps)
-	} else {
-		events.AppendText("Restoring original settings for Office Macros\n")
-
-		_restoreOffice(pathRegEx, valueName, standardOfficeApps)
-	}
+var OfficeMacros = &OfficeRegistryRegExSingleDWORD{
+	RootKey:         registry.CURRENT_USER,
+	PathRegEx:       "SOFTWARE\\Microsoft\\Office\\%s\\%s\\Security",
+	ValueName:       "VBAWarnings",
+	HardenedValue:   4,
+	OfficeApps:      standardOfficeApps,
+	OfficeVersions:  standardOfficeVersions,
+	shortName:       "OfficeMacros",
+	longName:        "Office Macros",
+	hardenByDefault: true,
 }
 
-// ActiveX
-
-func triggerOfficeActiveX(harden bool) {
-	var path = "SOFTWARE\\Microsoft\\Office\\Common\\Security"
-	key, _, _ := registry.CreateKey(registry.CURRENT_USER, path, registry.WRITE)
-	var valueName = "DisableAllActiveX"
-
-	if harden == false {
-		events.AppendText("Restoring original settings for ActiveX in Office\n")
-		// Retrieve saved state.
-		value, err := retrieveOriginalRegistryDWORD(path, valueName)
-		if err == nil {
-			key.SetDWordValue(valueName, value)
-		} else {
-			key.DeleteValue(valueName)
-		}
-	} else {
-		events.AppendText("Hardening by disabling ActiveX in Office\n")
-		// Save current state.
-		saveOriginalRegistryDWORD(key, path, valueName)
-		// Harden.
-		key.SetDWordValue(valueName, 1)
-	}
-
-	key.Close()
+// OfficeActiveX contains ActiveX registry keys
+var OfficeActiveX = &RegistrySingleValueDWORD{
+	RootKey:         registry.CURRENT_USER,
+	Path:            "SOFTWARE\\Microsoft\\Office\\Common\\Security",
+	ValueName:       "DisableAllActiveX",
+	HardenedValue:   1,
+	shortName:       "OfficeActiveX",
+	longName:        "Office ActiveX",
+	hardenByDefault: true,
 }
 
-// DDE Mitigations for Word, Outlook and Excel
-
+//// DDE Mitigations for Word, Outlook and Excel
 // Doesn't harden OneNote for now (due to high impact).
+//
+// Microsoft disabled DDE in Word with Office Update ADV170021 update. We make sure
+// that it is in default (disabled) state. This update adds a new Windows registry
+// key that controls the DDE feature's status for the Word app. The default value
+// disables DDE. Here are registry key's values:
+// [HKEY_CURRENT_USER\Software\Microsoft\Office\%s\Word\Security] AllowDDE(DWORD)
+// AllowDDE(DWORD) = 0: To disable DDE. This is the default setting after you install the update.
+// AllowDDE(DWORD) = 1: To allow DDE requests to an already running program, but prevent DDE requests that require another executable program to be launched.
+// AllowDDE(DWORD) = 2: To fully allow DDE requests.
+// On 1/9/2018, Microsoft released an update for Microsoft Office that adds defense-in-depth configuration options to selectively disable the DDE protocol in all supported editions of Microsoft Excel.
+// If you need to change DDE functionality in Excel after installing the update, follow these steps:
+// In the Registry Editor navigate to \HKEY_CURRENT_USER\Software\Microsoft\Office&lt;version>\Excel\Security DisableDDEServerLaunch(DWORD)
+// Set the DWORD value based on your requirements as follows:
+// DisableDDEServerLaunch = 0: Keep DDE server launch settings unchanged from their initial behavior. This is the default setting after you install the update.
+// DisableDDEServerLaunch = 1: Do not display the dialog that allows users to choose whether to launch a specific DDE server. Instead, behave automatically as though the user chose the default choice of NO.
+// In the Registry Editor navigate to \HKEY_CURRENT_USER\Software\Microsoft\Office&lt;version>\Excel\Security DisableDDEServerLookup(DWORD)
+// Set the DWORD value based on your requirements as follows:
+// DisableDDEServerLookup = 0: Keep DDE server lookup settings unchanged from their initial behavior. This is the default setting after you install the update.
+// DisableDDEServerLookup = 1: Disable querying for DDE Server availability - no query attempt will be made to find DDE servers. .
+
+//
 // [HKEY_CURRENT_USER\Software\Microsoft\Office\%s\Word\Options]
 // [HKEY_CURRENT_USER\Software\Microsoft\Office\%s\Word\Options\WordMail] (this one is for Outlook)
 // [HKEY_CURRENT_USER\Software\Microsoft\Office\%s\Excel\Options]
@@ -148,65 +130,234 @@ func triggerOfficeActiveX(harden bool) {
 // for Word&Outlook 2007:
 // [HKEY_CURRENT_USER\Software\Microsoft\Office\12.0\Word\Options\vpref]
 //    fNoCalclinksOnopen_90_1(DWORD)=1
+var pathRegExOptions = "SOFTWARE\\Microsoft\\Office\\%s\\%s\\Options"
+var pathRegExWordMail = "SOFTWARE\\Microsoft\\Office\\%s\\%s\\Options\\WordMail"
+var pathRegExSecurity = "Software\\Microsoft\\Office\\%s\\%s\\Security"
+var pathWord2007 = "Software\\Microsoft\\Office\\12.0\\Word\\Options\\vpref"
 
-func triggerOfficeDDE(harden bool) {
-	var valueNameLinks = "DontUpdateLinks"
-	var valueLinks uint32 = 1
+// OfficeDDE contains the registry keys for DDE hardening
+// please also refer to
+// https://docs.microsoft.com/en-us/security-updates/securityadvisories/2017/4053440
+var OfficeDDE = &MultiHardenInterfaces{
+	hardenInterfaces: []HardenInterface{
+		// AllowDDE: part of Update ADV170021
+		// disables DDE for Word (default setting after installation of update)
+		&OfficeRegistryRegExSingleDWORD{
+			RootKey:       registry.CURRENT_USER,
+			PathRegEx:     pathRegExSecurity,
+			ValueName:     "AllowDDE",
+			HardenedValue: 0,
+			OfficeApps:    []string{"Word"},
+			OfficeVersions: []string{
+				"14.0", // Office 2010
+				"15.0", // Office 2013
+				"16.0", // Office 2016
+			},
+			shortName: "OfficeDDE_AllowDDE_Word",
+		},
+		// DisableDDEServerLaunch: part of  Update ADV170021
+		// "0" reflects Microsoft standard settings. If you want to further harden
+		// your settings you could use "1" and uncomment this
+		//&OfficeRegistryRegExSingleDWORD{
+		//	RootKey:       registry.CURRENT_USER,
+		//	PathRegEx:     pathRegExSecurity,
+		//	ValueName:     "DisableDDEServerLaunch",
+		//	HardenedValue: 0,
+		//	OfficeApps:    []string{"Excel"},
+		//	OfficeVersions: []string{
+		//		"14.0", // Office 2010
+		//		"15.0", // Office 2013
+		//		"16.0", // Office 2016
+		//	},
+		//	shortName: "OfficeDDE_DDEServer_Excel1",
+		//},
+		// DisableDDEServerLookup: part of  Update ADV170021
+		// "0" reflects Microsoft standard settings. If you want to further harden
+		// your settings you could use "1" and uncomment this
+		//&OfficeRegistryRegExSingleDWORD{
+		//	RootKey:       registry.CURRENT_USER,
+		//	PathRegEx:     pathRegExSecurity,
+		//	ValueName:     "DisableDDEServerLookup",
+		//	HardenedValue: 0,
+		//	OfficeApps:    []string{"Excel"},
+		//	OfficeVersions: []string{
+		//		"14.0", // Office 2010
+		//		"15.0", // Office 2013
+		//		"16.0", // Office 2016
+		//	},
+		//	shortName: "OfficeDDE_DDEServer_Excel2",
+		//},
+		// the following setting has been removed, because it causes excel files
+		// that are opened in Windows Explorer not loading anymore (excel is
+		// started, but file is not opened (which is very inconvenient/unexpected)
+		// -> https://social.technet.microsoft.com/Forums/en-US/ec1d2f20-ec8a-4c3b-
+		//    9e1b-ee731981db7c/double-clicking-xlsx-files-opens-a-blank-excel-page
+		//&OfficeRegistryRegExSingleDWORD{
+		//	RootKey:        registry.CURRENT_USER,
+		//	PathRegEx:      pathRegExOptions,
+		//	ValueName:      "DDEAllowed",
+		//	HardenedValue:  0,
+		//	OfficeApps:     []string{"Excel"},
+		//	OfficeVersions: standardOfficeVersions,
+		//	shortName:      "OfficeDDE_DDEAllowedExcel",
+		//},
+		// the following setting has been removed, because it causes excel files
+		// that are opened in Windows Explorer not loading anymore (excel is
+		// started, but file is not opened (which is very inconvenient/unexpected)
+		// -> https://social.technet.microsoft.com/Forums/en-US/ec1d2f20-ec8a-4c3b-
+		//    9e1b-ee731981db7c/double-clicking-xlsx-files-opens-a-blank-excel-page
+		//&OfficeRegistryRegExSingleDWORD{
+		//	RootKey:        registry.CURRENT_USER,
+		//	PathRegEx:      pathRegExOptions,
+		//	ValueName:      "DDECleaned",
+		//	HardenedValue:  1,
+		//	OfficeApps:     []string{"Excel"},
+		//	OfficeVersions: standardOfficeVersions,
+		//	shortName:      "OfficeDDE_DDECleanedExcel",
+		//},
+		// the following setting has been removed, because it causes excel files
+		// that are opened in Windows Explorer not loading anymore (excel is
+		// started, but file is not opened (which is very inconvenient/unexpected)
+		//&OfficeRegistryRegExSingleDWORD{
+		//	RootKey:        registry.CURRENT_USER,
+		//	PathRegEx:      pathRegExOptions,
+		//	ValueName:      "Options",
+		//	HardenedValue:  0x117,
+		//	OfficeApps:     []string{"Excel"},
+		//	OfficeVersions: standardOfficeVersions,
+		//	shortName:      "OfficeDDE_OptionsExcel",
+		//},
 
-	var valueNameDDEAllowed = "DDEAllowed"
-	var valueDDEAllowed uint32
+		// WorkbookLinkWarnings
+		// Impact of mitigation: Disabling this feature could prevent Excel
+		// spreadsheets from updating dynamically if disabled in the registry.
+		// Data might not be completely up-to-date because it is no longer being
+		// updated automatically via live feed. To update the worksheet, the user
+		// must start the feed manually. In addition, the user will not receive
+		// prompts to remind them to manually update the worksheet.
+		&OfficeRegistryRegExSingleDWORD{
+			RootKey:        registry.CURRENT_USER,
+			PathRegEx:      pathRegExSecurity,
+			ValueName:      "WorkbookLinkWarnings",
+			HardenedValue:  2,
+			OfficeApps:     []string{"Excel"},
+			OfficeVersions: standardOfficeVersions,
+			shortName:      "OfficeDDE_WorkbookLinksExcel",
+		},
+		// fNoCalclinksOnopen_90_1 & DontUpdateLinks:
+		// Impact of mitigation: Setting this registry key will disable automatic
+		// update for DDE field and OLE links. Users can still enable the update by
+		// right-clicking on the field and clicking “Update Field”.
+		&OfficeRegistryRegExSingleDWORD{
+			RootKey:       registry.CURRENT_USER,
+			PathRegEx:     pathRegExOptions,
+			ValueName:     "DontUpdateLinks",
+			HardenedValue: 1,
+			OfficeApps:    []string{"Word", "Excel"},
+			OfficeVersions: []string{
+				"14.0", // Office 2010
+				"15.0", // Office 2013
+				"16.0", // Office 2016
+			},
+			shortName: "OfficeDDE_DontUpdateLinksWordExcel",
+		},
+		&OfficeRegistryRegExSingleDWORD{
+			RootKey:       registry.CURRENT_USER,
+			PathRegEx:     pathRegExWordMail,
+			ValueName:     "DontUpdateLinks",
+			HardenedValue: 1,
+			OfficeApps:    []string{"Word"},
+			OfficeVersions: []string{
+				"14.0", // Office 2010
+				"15.0", // Office 2013
+				"16.0", // Office 2016
+			},
+			shortName: "OfficeDDE_DontUpdateLinksWordMail",
+		},
+		&RegistrySingleValueDWORD{
+			RootKey:       registry.CURRENT_USER,
+			Path:          pathWord2007,
+			ValueName:     "fNoCalclinksOnopen_90_1",
+			HardenedValue: 1,
+			shortName:     "OfficeDDE_Word2007",
+		},
+	},
+	shortName:       "OfficeDDE",
+	longName:        "Office DDE Mitigations",
+	hardenByDefault: true,
+}
 
-	var valueNameDDECleaned = "DDECleaned"
-	var valueDDECleaned uint32 = 1
+//// HardenInterface methods
 
-	var valueNameOptions = "Options"
-	var valueOptions uint32 = 0x117 // dword:00000117
+// Harden hardens OfficeRegistryRegExSingleDWORD registry values
+func (officeRegEx OfficeRegistryRegExSingleDWORD) Harden(harden bool) error {
 
-	var valueNameWorkbookLinkWarnings = "WorkbookLinkWarnings"
-	var valueWorkbookLinkWarnings uint32 = 2
+	for _, officeVersion := range officeRegEx.OfficeVersions {
+		for _, officeApp := range officeRegEx.OfficeApps {
+			path := fmt.Sprintf(officeRegEx.PathRegEx, officeVersion, officeApp)
 
-	var valueNameWord2007 = "fNoCalclinksOnopen_90_1"
-	var valueWord2007 uint32 = 1
+			// build a RegistrySingleValueDWORD so we can reuse the Harden() method
+			var singleDWORD = &RegistrySingleValueDWORD{
+				RootKey:       officeRegEx.RootKey,
+				Path:          path,
+				ValueName:     officeRegEx.ValueName,
+				HardenedValue: officeRegEx.HardenedValue,
+				shortName:     officeRegEx.shortName,
+				longName:      officeRegEx.longName,
+				description:   officeRegEx.description,
+			}
 
-	var pathRegEx = "SOFTWARE\\Microsoft\\Office\\%s\\%s\\Options"
-	var pathRegExWordMail = "SOFTWARE\\Microsoft\\Office\\%s\\%s\\Options\\WordMail"
-	var pathRegExSecurity = "Software\\Microsoft\\Office\\%s\\%s\\Security"
-	var pathWord2007 = "Software\\Microsoft\\Office\\12.0\\Word\\Options\\vpref"
-
-	keyWord2007, _, _ := registry.CreateKey(registry.CURRENT_USER, pathWord2007, registry.WRITE)
-
-	if harden == false {
-		events.AppendText("Restoring original settings for Office DDE Links\n")
-
-		_restoreOffice(pathRegEx, valueNameLinks, []string{"Word", "Excel"})
-		_restoreOffice(pathRegExWordMail, valueNameLinks, []string{"Word"})
-		_restoreOffice(pathRegEx, valueNameOptions, []string{"Excel"})
-		_restoreOffice(pathRegEx, valueNameDDECleaned, []string{"Excel"})
-		_restoreOffice(pathRegEx, valueNameDDEAllowed, []string{"Excel"})
-		_restoreOffice(pathRegExSecurity, valueNameWorkbookLinkWarnings, []string{"Excel"})
-
-		//// Word 2007 key:
-		// Retrieve saved state.
-		value, err := retrieveOriginalRegistryDWORD(pathWord2007, valueNameWord2007)
-		if err == nil {
-			keyWord2007.SetDWordValue(valueNameWord2007, value)
-		} else {
-			keyWord2007.DeleteValue(valueNameWord2007)
+			// call RegistrySingleValueDWORD Harden method to Harden or Restore.
+			err := singleDWORD.Harden(harden)
+			if err != nil {
+				return err
+			}
 		}
-	} else {
-		events.AppendText("Hardening by disabling Office DDE Links\n")
-
-		_hardenOffice(pathRegEx, valueNameLinks, valueLinks, []string{"Word", "Excel"})
-		_hardenOffice(pathRegExWordMail, valueNameLinks, valueLinks, []string{"Word"})
-		_hardenOffice(pathRegEx, valueNameDDEAllowed, valueDDEAllowed, []string{"Excel"})
-		_hardenOffice(pathRegEx, valueNameDDECleaned, valueDDECleaned, []string{"Excel"})
-		_hardenOffice(pathRegEx, valueNameOptions, valueOptions, []string{"Excel"})
-		_hardenOffice(pathRegExSecurity, valueNameWorkbookLinkWarnings, valueWorkbookLinkWarnings, []string{"Excel"})
-
-		//// Word 2007 key:
-		// Save current state.
-		saveOriginalRegistryDWORD(keyWord2007, pathWord2007, valueNameWord2007)
-		// Harden.
-		keyWord2007.SetDWordValue(valueNameWord2007, valueWord2007)
 	}
+
+	return nil
+}
+
+// IsHardened verifies if OfficeRegistryRegExSingleDWORD is already hardenend
+func (officeRegEx OfficeRegistryRegExSingleDWORD) IsHardened() bool {
+	var hardened = true
+
+	for _, officeVersion := range officeRegEx.OfficeVersions {
+		for _, officeApp := range officeRegEx.OfficeApps {
+			path := fmt.Sprintf(officeRegEx.PathRegEx, officeVersion, officeApp)
+
+			// build a RegistrySingleValueDWORD so we can reuse the isHardened() method
+			var singleDWORD = &RegistrySingleValueDWORD{
+				RootKey:       officeRegEx.RootKey,
+				Path:          path,
+				ValueName:     officeRegEx.ValueName,
+				HardenedValue: officeRegEx.HardenedValue,
+			}
+
+			if !singleDWORD.IsHardened() {
+				hardened = false
+			}
+		}
+	}
+	return hardened
+}
+
+// Name returns the (short) name of the harden item
+func (officeRegEx OfficeRegistryRegExSingleDWORD) Name() string {
+	return officeRegEx.shortName
+}
+
+// LongName returns the long name of the harden item
+func (officeRegEx OfficeRegistryRegExSingleDWORD) LongName() string {
+	return officeRegEx.longName
+}
+
+// Description of the harden item
+func (officeRegEx OfficeRegistryRegExSingleDWORD) Description() string {
+	return officeRegEx.description
+}
+
+// HardenByDefault returns if subject should be hardened by default
+func (officeRegEx OfficeRegistryRegExSingleDWORD) HardenByDefault() bool {
+	return officeRegEx.hardenByDefault
 }

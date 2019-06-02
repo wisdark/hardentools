@@ -1,5 +1,5 @@
 // Hardentools
-// Copyright (C) 2017  Security Without Borders
+// Copyright (C) 2018  Security Without Borders
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -12,54 +12,150 @@
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program.  If not, see <http://wweventsDialog.gnu.org/licenses/>.
 
 package main
 
-import (
-	"github.com/lxn/walk"
-	. "github.com/lxn/walk/declarative"
-	"golang.org/x/sys/windows/registry"
-	"os"
-)
+/*
+// some C code for managing elevated privileges
+#include <windows.h>
+#include <shellapi.h>
 
-type ExpertConfig struct {
-	// WSH.
-	WSH bool
-	// Office.
-	OfficeOLE     bool
-	OfficeMacros  bool
-	OfficeActiveX bool
-	OfficeDDE     bool
-	// PDF.
-	PDFJS               bool
-	PDFObjects          bool
-	PDFProtectedMode    bool
-	PDFProtectedView    bool
-	PDFEnhancedSecurity bool
-	// Autorun.
-	Autorun bool
-	// PowerShell.
-	PowerShell bool
-	// UAC.
-	UAC bool
-	// Explorer.
-	FileAssociations bool
+// checks if we are running with elevated privileges (admin rights)
+int IsElevated( ) {
+    boolean fRet = FALSE;
+    HANDLE hToken = NULL;
+    if( OpenProcessToken( GetCurrentProcess( ),TOKEN_QUERY,&hToken ) ) {
+        TOKEN_ELEVATION Elevation;
+        DWORD cbSize = sizeof( TOKEN_ELEVATION );
+        if( GetTokenInformation( hToken, TokenElevation, &Elevation, sizeof( Elevation ), &cbSize ) ) {
+            fRet = Elevation.TokenIsElevated;
+        }
+    }
+    if( hToken ) {
+        CloseHandle( hToken );
+    }
+    if( fRet ){
+		return 1;
+	}
+	else {
+		return 0;
+	}
 }
 
-var expertConfig = &ExpertConfig{true, true, true, true, true, true, true, true, true, true, true, true, true, true}
+// executes the executable in the current directory (or in path) with "runas"
+// to aquire admin privileges
+int ExecuteWithRunas(char execName[]){
+	SHELLEXECUTEINFO shExecInfo;
 
-var window *walk.MainWindow
-var events *walk.TextEdit
-var progress *walk.ProgressBar
+	shExecInfo.cbSize = sizeof(SHELLEXECUTEINFO);
 
+	shExecInfo.fMask = 0x00008000;
+	shExecInfo.hwnd = NULL;
+	shExecInfo.lpVerb = "runas";
+	shExecInfo.lpFile = execName;
+	shExecInfo.lpParameters = NULL;
+	shExecInfo.lpDirectory = NULL;
+	shExecInfo.nShow = SW_NORMAL;
+	shExecInfo.hInstApp = NULL;
+
+	boolean success = ShellExecuteEx(&shExecInfo);
+	if (success)
+		return 1;
+	else
+		return 0;
+}
+*/
+import "C"
+
+import (
+	"fmt"
+	"io"
+	"log"
+	"os"
+
+	"golang.org/x/sys/windows/registry"
+)
+
+// global configuration constants
 const hardentoolsKeyPath = "SOFTWARE\\Security Without Borders\\"
+const logpath = "hardentools.log"
+const defaultLogLevel = "Info"
 
+// allHardenSubjects contains all top level harden subjects that should
+// be considered
+// Elevated rights are needed by: UAC, PowerShell, FileAssociations, Autorun, WindowsASR
+var allHardenSubjects = []HardenInterface{}
+var allHardenSubjectsWithAndWithoutElevatedPrivileges = []HardenInterface{
+	// WSH.
+	WSH,
+	// Office.
+	OfficeOLE,
+	OfficeMacros,
+	OfficeActiveX,
+	OfficeDDE,
+	// PDF.
+	AdobePDFJS,
+	AdobePDFObjects,
+	AdobePDFProtectedMode,
+	AdobePDFProtectedView,
+	AdobePDFEnhancedSecurity,
+	// Autorun.
+	Autorun,
+	// PowerShell.
+	PowerShell,
+	// UAC.
+	UAC,
+	// Explorer.
+	FileAssociations,
+	ShowFileExt,
+	// Windows 10 / 1709 ASR
+	WindowsASR,
+}
+var allHardenSubjectsForUnprivilegedUsers = []HardenInterface{
+	// WSH.
+	WSH,
+	// Office.
+	OfficeOLE,
+	OfficeMacros,
+	OfficeActiveX,
+	OfficeDDE,
+	// PDF.
+	AdobePDFJS,
+	AdobePDFObjects,
+	AdobePDFProtectedMode,
+	AdobePDFProtectedView,
+	AdobePDFEnhancedSecurity,
+}
+
+var expertConfig map[string]bool
+
+// Loggers for log output (we only need info and trace, errors have to be
+// displayed in the GUI)
+var (
+	Trace *log.Logger
+	Info  *log.Logger
+)
+
+// initLogging inits loggers
+func initLogging(traceHandle io.Writer, infoHandle io.Writer) {
+	Trace = log.New(traceHandle,
+		"TRACE: ",
+		log.Ldate|log.Ltime|log.Lshortfile)
+
+	Info = log.New(infoHandle,
+		"INFO: ",
+		log.Ldate|log.Ltime|log.Lshortfile)
+}
+
+// checkStatus checks status of hardentools registry key
+// (that tells if user environment is hardened / not hardened)
 func checkStatus() bool {
 	key, err := registry.OpenKey(registry.CURRENT_USER, hardentoolsKeyPath, registry.READ)
 	if err != nil {
 		return false
 	}
+	defer key.Close()
 
 	value, _, err := key.GetIntegerValue("Harden")
 	if err != nil {
@@ -73,209 +169,172 @@ func checkStatus() bool {
 	return false
 }
 
+// markStatus sets hardentools status registry key
+// (that tells if user environment is hardened / not hardened)
 func markStatus(hardened bool) {
-	key, _, err := registry.CreateKey(registry.CURRENT_USER, hardentoolsKeyPath, registry.WRITE)
-	if err != nil {
-		panic(err)
-	}
 
 	if hardened {
-		key.SetDWordValue("Harden", 1)
+		key, _, err := registry.CreateKey(registry.CURRENT_USER, hardentoolsKeyPath, registry.ALL_ACCESS)
+		if err != nil {
+			Info.Println(err.Error())
+			panic(err)
+		}
+		defer key.Close()
+
+		// set value that states that we have hardened the system
+		err = key.SetDWordValue("Harden", 1)
+		if err != nil {
+			Info.Println(err.Error())
+			showErrorDialog("Could not set hardentools registry keys - restore will not work!")
+			panic(err)
+		}
 	} else {
-		key.SetDWordValue("Harden", 0)
+		// on restore delete all hardentools registry keys afterwards
+		err := registry.DeleteKey(registry.CURRENT_USER, hardentoolsKeyPath)
+		if err != nil {
+			Info.Println(err.Error())
+			events.AppendText("Could not remove hardentools registry keys - nothing to worry about.\r\n")
+		}
 	}
 }
 
+// hardenAll starts harden procedure
 func hardenAll() {
-	triggerAll(true)
-	markStatus(true)
+	showEventsTextArea()
 
-	walk.MsgBox(window, "Done!", "I have hardened all risky features!\nFor all changes to take effect please restart Windows.", walk.MsgBoxIconInformation)
-	os.Exit(0)
+	// use goroutine to allow lxn/walk to update window
+	go func() {
+		triggerAll(true)
+		markStatus(true)
+		showStatus()
+
+		showInfoDialog("Done!\nI have hardened all risky features!\nFor all changes to take effect please restart Windows.")
+		os.Exit(0)
+	}()
 }
 
+// restoreAll starts restore procedure
 func restoreAll() {
-	triggerAll(false)
-	markStatus(false)
+	showEventsTextArea()
 
-	walk.MsgBox(window, "Done!", "I have restored all risky features!\nFor all changes to take effect please restart Windows.", walk.MsgBoxIconExclamation)
-	os.Exit(0)
+	// use goroutine to allow lxn/walk to update window
+	go func() {
+		triggerAll(false)
+		restoreSavedRegistryKeys()
+		markStatus(false)
+		showStatus()
+
+		showInfoDialog("Done!\nI have restored all risky features!\nFor all changes to take effect please restart Windows.")
+		os.Exit(0)
+	}()
 }
 
+// triggerAll is used for harden and restore, depending on the harden parameter
+// harden == true => harden
+// harden == false => restore
+// triggerAll evaluates the expertConfig settings and hardens/restores only
+// the active items
 func triggerAll(harden bool) {
-	//events.AppendText("expertConfig = "+expertConfig)
-	// WSH.
-	if expertConfig.WSH {
-		triggerWSH(harden)
-	}
-	// Office.
-	if expertConfig.OfficeOLE {
-		triggerOfficeOLE(harden)
-	}
-	if expertConfig.OfficeMacros {
-		triggerOfficeMacros(harden)
-	}
-	if expertConfig.OfficeActiveX {
-		triggerOfficeActiveX(harden)
-	}
-	if expertConfig.OfficeDDE {
-		triggerOfficeDDE(harden)
-	}
-	// PDF.
-	if expertConfig.PDFJS {
-		triggerPDFJS(harden)
-	}
-	if expertConfig.PDFObjects {
-		triggerPDFObjects(harden)
-	}
-	if expertConfig.PDFProtectedMode {
-		triggerPDFProtectedMode(harden)
-	}
-	if expertConfig.PDFProtectedView {
-		triggerPDFProtectedView(harden)
-	}
-	if expertConfig.PDFEnhancedSecurity {
-		triggerPDFEnhancedSecurity(harden)
-	}
-	// Autorun.
-	if expertConfig.Autorun {
-		triggerAutorun(harden)
-	}
-	// PowerShell.
-	if expertConfig.PowerShell {
-		triggerPowerShell(harden)
-	}
-	// UAC.
-	if expertConfig.UAC {
-		triggerUAC(harden)
-	}
-	// Explorer.
-	if expertConfig.FileAssociations {
-		triggerFileAssociation(harden)
+	var outputString string
+	if harden {
+		events.AppendText("Now we are hardening ")
+		outputString = "Hardening"
+	} else {
+		events.AppendText("Now we are restoring ")
+		outputString = "Restoring"
 	}
 
-	progress.SetValue(100)
+	for _, hardenSubject := range allHardenSubjects {
+		if expertConfig[hardenSubject.Name()] == true {
+			events.AppendText(fmt.Sprintf("%s, ", hardenSubject.Name()))
+
+			err := hardenSubject.Harden(harden)
+			if err != nil {
+				events.AppendText(fmt.Sprintf("\r\n!! %s %s FAILED !!\r\n", outputString, hardenSubject.Name()))
+				Info.Printf("Error for operation %s: %s", hardenSubject.Name(), err.Error())
+			} else {
+				Trace.Printf("%s %s has been successful", outputString, hardenSubject.Name())
+			}
+		}
+	}
+
+	events.AppendText("\r\n")
 }
 
-func main() {
-	var labelText, buttonText, eventsText string
-	var buttonFunc func()
+// hardenDefaultsAgain restores the original settings and
+// hardens using the default settings (no custom settings apply)
+func hardenDefaultsAgain() {
+	showEventsTextArea()
 
-	if checkStatus() == false {
-		buttonText = "Harden!"
-		buttonFunc = hardenAll
-		labelText = "Ready to harden some features of your system?"
+	// use goroutine to allow lxn/walk to update window
+	go func() {
+		// restore hardened settings
+		triggerAll(false)
+		restoreSavedRegistryKeys()
+		markStatus(false)
+
+		// reset expertConfig (is set to currently already hardened settings
+		// in case of restore
+		expertConfig = make(map[string]bool)
+		for _, hardenSubject := range allHardenSubjects {
+			expertConfig[hardenSubject.Name()] = hardenSubject.HardenByDefault()
+		}
+
+		// harden all settings
+		triggerAll(true)
+		markStatus(true)
+
+		showInfoDialog("Done!\nI have hardened all risky features!\nFor all changes to take effect please restart Windows.")
+		os.Exit(0)
+	}()
+}
+
+// showStatus iterates all harden subjects and prints status of each
+// (checks real status on system)
+func showStatus() {
+	for _, hardenSubject := range allHardenSubjects {
+		if hardenSubject.IsHardened() {
+			eventText := fmt.Sprintf("%s is now hardened\r\n", hardenSubject.Name())
+			events.AppendText(eventText)
+			Info.Print(eventText)
+		} else {
+			eventText := fmt.Sprintf("%s is now NOT hardened\r\n", hardenSubject.Name())
+			events.AppendText(eventText)
+			Info.Print(eventText)
+		}
+	}
+}
+
+// restartWithElevatedPrivileges tries to restart hardentools.exe with admin privileges
+func restartWithElevatedPrivileges() {
+	// find out our program (exe) name
+	progName := os.Args[0]
+
+	// start us again, this time with elevated privileges
+	if C.ExecuteWithRunas(C.CString(progName)) == 1 {
+		// exit this instance (the unprivileged one)
+		os.Exit(0)
 	} else {
-		buttonText = "Restore..."
-		buttonFunc = restoreAll
-		labelText = "We have already hardened some risky features, do you want to restore them?"
+		// something went wrong
+		showErrorDialog("Error while trying to gain elevated privileges. Starting in unprivileged mode...")
+	}
+}
+
+// main method for hardentools
+func main() {
+	// check if hardentools has been started with elevated rights. If not
+	// ask user if he wants to elevate
+	if C.IsElevated() == 0 {
+		askElevationDialog()
+	}
+	elevationStatus := false
+	if C.IsElevated() == 1 {
+		elevationStatus = true
 	}
 
-	MainWindow{
-		AssignTo: &window,
-		Title:    "HardenTools - Security Without Borders",
-		MinSize:  Size{600, 500},
-		Layout:   VBox{},
-		DataBinder: DataBinder{
-			DataSource: expertConfig,
-			AutoSubmit: true,
-		},
-		Children: []Widget{
-			Label{Text: labelText},
-			PushButton{
-				Text:      buttonText,
-				OnClicked: buttonFunc,
-			},
-			ProgressBar{
-				AssignTo: &progress,
-			},
-			TextEdit{
-				AssignTo: &events,
-				Text:     eventsText,
-				ReadOnly: true,
-				MinSize:  Size{500, 250},
-			},
-			HSpacer{},
-			HSpacer{},
-			Label{Text: "Expert Settings - change only if you now what you are doing!"},
-			Composite{
-				Layout: Grid{Columns: 3},
-				Border: true,
-				Children: []Widget{
-					CheckBox{
-						Name:    "wshCB",
-						Text:    "Windows Script Host",
-						Checked: Bind("WSH"),
-					},
-					CheckBox{
-						Name:    "officeOleCB",
-						Text:    "Office Packager Objects (OLE)",
-						Checked: Bind("OfficeOLE"),
-					},
-					CheckBox{
-						Name:    "OfficeMacros",
-						Text:    "Office Macros",
-						Checked: Bind("OfficeMacros"),
-					},
-					CheckBox{
-						Name:    "OfficeActiveX",
-						Text:    "Office ActiveX",
-						Checked: Bind("OfficeActiveX"),
-					},
-					CheckBox{
-						Name:    "OfficeDDE",
-						Text:    "Office DDE  Links",
-						Checked: Bind("OfficeDDE"),
-					},
-					CheckBox{
-						Name:    "PDFJS",
-						Text:    "Acrobat Reader JavaScript",
-						Checked: Bind("PDFJS"),
-					},
-					CheckBox{
-						Name:    "PDFObjects",
-						Text:    "Acrobat Reader Embedded Objects",
-						Checked: Bind("PDFObjects"),
-					},
-					CheckBox{
-						Name:    "PDFProtectedMode",
-						Text:    "Acrobat Reader ProtectedMode",
-						Checked: Bind("PDFProtectedMode"),
-					},
-					CheckBox{
-						Name:    "PDFProtectedView",
-						Text:    "Acrobat Reader ProtectedView",
-						Checked: Bind("PDFProtectedView"),
-					},
-					CheckBox{
-						Name:    "PDFEnhancedSecurity",
-						Text:    "Acrobat Reader Enhanced Security",
-						Checked: Bind("PDFEnhancedSecurity"),
-					},
-					CheckBox{
-						Name:    "Autorun",
-						Text:    "AutoRun and AutoPlay",
-						Checked: Bind("Autorun"),
-					},
-					CheckBox{
-						Name:    "UAC",
-						Text:    "UAC Prompt",
-						Checked: Bind("UAC"),
-					},
-					CheckBox{
-						Name:    "FileAssociations",
-						Text:    "File associations",
-						Checked: Bind("FileAssociations"),
-					},
-					CheckBox{
-						Name:    "PowerShell",
-						Text:    "Powershell and cmd",
-						Checked: Bind("PowerShell"),
-					},
-				},
-			},
-		},
-	}.Create()
+	// show splash screen
+	splashChannel := make(chan bool, 1)
+	showSplash(splashChannel)
 
-	window.Run()
+	openMainWindow(splashChannel, elevationStatus)
 }

@@ -1,5 +1,5 @@
 // Hardentools
-// Copyright (C) 2017  Security Without Borders
+// Copyright (C) 2017-2018  Security Without Borders
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,19 +20,14 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-func triggerWSH(harden bool) {
-	keyName := "SOFTWARE\\Microsoft\\Windows Script Host\\Settings"
-	key, _, _ := registry.CreateKey(registry.CURRENT_USER, keyName, registry.ALL_ACCESS)
-	valueName := "Enabled"
-
-	if harden == false {
-		events.AppendText("Restoring original settings for Windows Script Host\n")
-		restoreKey(key, keyName, valueName)
-	} else {
-		events.AppendText("Hardening by disabling Windows Script Host\n")
-		saveOriginalRegistryDWORD(key, keyName, valueName)
-		key.SetDWordValue(valueName, 0)
-	}
-
-	key.Close()
+// WSH contains registry keys for Windows Script Host Settings
+var WSH = &RegistrySingleValueDWORD{
+	RootKey:         registry.CURRENT_USER,
+	Path:            "SOFTWARE\\Microsoft\\Windows Script Host\\Settings",
+	ValueName:       "Enabled",
+	HardenedValue:   0,
+	shortName:       "WSH",
+	longName:        "Windows Script Host",
+	description:     "Windows Script Host",
+	hardenByDefault: true,
 }
