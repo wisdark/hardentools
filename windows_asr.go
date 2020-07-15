@@ -1,5 +1,5 @@
 // Hardentools
-// Copyright (C) 2017-2018  Security Without Borders
+// Copyright (C) 2020  Security Without Borders
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -61,7 +61,7 @@ type WindowsASRStruct struct {
 
 // WindowsASR contains Names for Windows ASR implementation of hardenInterface
 var WindowsASR = &WindowsASRStruct{
-	shortName:       "WindowsASR",
+	shortName:       "Windows ASR",
 	longName:        "Windows ASR (needs Win 10/1709)",
 	description:     "Windows Attack Surface Reduction (ASR) (needs Win 10/1709)",
 	hardenByDefault: true,
