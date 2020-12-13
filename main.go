@@ -1,5 +1,5 @@
 // Hardentools
-// Copyright (C) 2020  Security Without Borders
+// Copyright (C) 2017-2020 Security Without Borders
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -12,11 +12,12 @@
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://wweventsDialog.gnu.org/licenses/>.
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 package main
 
 import (
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"io"
@@ -33,87 +34,54 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// global configuration constants
-const hardentoolsKeyPath = "SOFTWARE\\Security Without Borders\\"
-const logpath = "hardentools.log"
-const defaultLogLevel = "Info"
-
 // allHardenSubjects contains all top level harden subjects that should
-// be considered
-// Elevated rights are needed by: UAC, PowerShell, FileAssociations, Autorun, WindowsASR
+// be considered.
 var allHardenSubjects = []HardenInterface{}
-var allHardenSubjectsWithAndWithoutElevatedPrivileges = []HardenInterface{
-	// WSH.
+var hardenSubjectsForUnprivilegedUsers = []HardenInterface{
 	WSH,
-	// Office.
 	OfficeOLE,
 	OfficeMacros,
 	OfficeActiveX,
 	OfficeDDE,
-	// PDF.
 	AdobePDFJS,
 	AdobePDFObjects,
 	AdobePDFProtectedMode,
 	AdobePDFProtectedView,
 	AdobePDFEnhancedSecurity,
-	// Autorun.
+}
+var hardenSubjectsForPrivilegedUsers = append(hardenSubjectsForUnprivilegedUsers, []HardenInterface{
 	Autorun,
-	// PowerShell.
 	PowerShell,
-	// cmd.exe.
 	Cmd,
-	// UAC.
 	UAC,
-	// Explorer.
 	FileAssociations,
 	ShowFileExt,
-	// Windows 10 / 1709 ASR
 	WindowsASR,
 	LSA,
-}
-var allHardenSubjectsForUnprivilegedUsers = []HardenInterface{
-	// WSH.
-	WSH,
-	// Office.
-	OfficeOLE,
-	OfficeMacros,
-	OfficeActiveX,
-	OfficeDDE,
-	// PDF.
-	AdobePDFJS,
-	AdobePDFObjects,
-	AdobePDFProtectedMode,
-	AdobePDFProtectedView,
-	AdobePDFEnhancedSecurity,
-}
-
-// Loggers for log output (we only need info and trace, errors have to be
-// displayed in the GUI)
-var (
-	Trace *log.Logger
-	Info  *log.Logger
-)
+}...)
 
 var mainWindow fyne.Window
 var expertConfig map[string]bool
 
-// initLogging inits loggers
+// Loggers for log output (we only need info and trace, errors have to be
+// displayed in the GUI).
+var (
+	Trace *log.Logger // set this logger to get trace level verbosity logging output
+	Info  *log.Logger // set this logger to get standard logging output
+)
+
+// initLogging initializes loggers.
 func initLogging(traceHandle io.Writer, infoHandle io.Writer) {
-	Trace = log.New(traceHandle,
-		"TRACE: ",
-		log.Ldate|log.Ltime|log.Lshortfile)
-
-	Info = log.New(infoHandle,
-		"INFO: ",
-		log.Ldate|log.Ltime|log.Lshortfile)
-
+	Trace = log.New(traceHandle, "TRACE: ", log.Lshortfile)
+	Info = log.New(infoHandle, "INFO: ", log.Lshortfile)
 	log.SetOutput(infoHandle)
 }
 
 // checkStatus checks status of hardentools registry key
-// (that tells if user environment is hardened / not hardened)
+// (that tells if user environment is hardened / not hardened).
 func checkStatus() bool {
-	key, err := registry.OpenKey(registry.CURRENT_USER, hardentoolsKeyPath, registry.READ)
+	key, err := registry.OpenKey(registry.CURRENT_USER, hardentoolsKeyPath,
+		registry.READ)
 	if err != nil {
 		return false
 	}
@@ -132,18 +100,19 @@ func checkStatus() bool {
 }
 
 // markStatus sets hardentools status registry key
-// (that tells if user environment is hardened / not hardened)
+// (that tells if user environment is hardened / not hardened).
 func markStatus(hardened bool) {
 
 	if hardened {
-		key, _, err := registry.CreateKey(registry.CURRENT_USER, hardentoolsKeyPath, registry.ALL_ACCESS)
+		key, _, err := registry.CreateKey(registry.CURRENT_USER,
+			hardentoolsKeyPath, registry.ALL_ACCESS)
 		if err != nil {
 			Info.Println(err.Error())
 			panic(err)
 		}
 		defer key.Close()
 
-		// set value that states that we have hardened the system
+		// Set value that states that we have hardened the system.
 		err = key.SetDWordValue("Harden", 1)
 		if err != nil {
 			Info.Println(err.Error())
@@ -151,7 +120,7 @@ func markStatus(hardened bool) {
 			panic(err)
 		}
 	} else {
-		// on restore delete all hardentools registry keys afterwards
+		// On restore delete all hardentools registry keys afterwards.
 		err := registry.DeleteKey(registry.CURRENT_USER, hardentoolsKeyPath)
 		if err != nil {
 			Info.Println(err.Error())
@@ -160,49 +129,49 @@ func markStatus(hardened bool) {
 	}
 }
 
-// hardenAll starts harden procedure
+// hardenAll starts harden procedure.
 func hardenAll() {
 	showEventsTextArea()
 
-	// use goroutine to allow lxn/walk to update window
+	// Use goroutine to allow gui to update window.
 	go func() {
 		triggerAll(true)
 		markStatus(true)
-		showStatus()
+		showStatus(false)
 
 		showEndDialog("Done!\nRisky features have been hardened!\nFor all changes to take effect please restart Windows.")
 		os.Exit(0)
 	}()
 }
 
-// restoreAll starts restore procedure
+// RestoreAll starts restore procedure.
 func restoreAll() {
 	showEventsTextArea()
 
-	// use goroutine to allow lxn/walk to update window
+	// Use goroutine to allow gui to update window.
 	go func() {
 		triggerAll(false)
 		restoreSavedRegistryKeys()
 		markStatus(false)
-		showStatus()
+		showStatus(false)
 
 		showEndDialog("Done!\nRestored settings to their original state.\nFor all changes to take effect please restart Windows.")
 		os.Exit(0)
 	}()
 }
 
-// triggerAll is used for harden and restore, depending on the harden parameter
+// triggerAll is used for harden and restore, depending on the harden parameter.
 // harden == true => harden
 // harden == false => restore
 // triggerAll evaluates the expertConfig settings and hardens/restores only
-// the active items
+// the active items.
 func triggerAll(harden bool) {
 	var outputString string
 	if harden {
-		//PrintEvent("Now we are hardening ")
+		Info.Println("Now we are hardening...")
 		outputString = "Hardening"
 	} else {
-		//PrintEvent("Now we are restoring ")
+		Info.Println("Now we are restoring...")
 		outputString = "Restoring"
 	}
 
@@ -212,6 +181,7 @@ func triggerAll(harden bool) {
 		if expertConfig[hardenSubject.Name()] == true {
 
 			err := hardenSubject.Harden(harden)
+
 			if err != nil {
 				ShowFailure(hardenSubject.Name(), err.Error())
 				Info.Printf("Error for operation %s: %s", hardenSubject.Name(), err.Error())
@@ -224,28 +194,28 @@ func triggerAll(harden bool) {
 }
 
 // hardenDefaultsAgain restores the original settings and
-// hardens using the default settings (no custom settings apply)
+// hardens using the default settings (no custom settings apply).
 func hardenDefaultsAgain() {
 	showEventsTextArea()
 
-	// use goroutine to allow lxn/walk to update window
+	// Use goroutine to allow gui to update window.
 	go func() {
-		// restore hardened settings
+		// Restore hardened settings.
 		triggerAll(false)
 		restoreSavedRegistryKeys()
 		markStatus(false)
 
-		// reset expertConfig (is set to currently already hardened settings
-		// in case of restore)
+		// Reset expertConfig (is set to currently already hardened settings
+		// in case of restore).
 		expertConfig = make(map[string]bool)
 		for _, hardenSubject := range allHardenSubjects {
 			expertConfig[hardenSubject.Name()] = hardenSubject.HardenByDefault()
 		}
 
-		// harden all settings
+		// Harden all settings.
 		triggerAll(true)
 		markStatus(true)
-		showStatus()
+		showStatus(false)
 
 		showEndDialog("Done!\nRisky features have been hardened!\nFor all changes to take effect please restart Windows.")
 		os.Exit(0)
@@ -254,65 +224,94 @@ func hardenDefaultsAgain() {
 
 // showStatus iterates all harden subjects and prints status of each
 // (checks real status on system)
-func showStatus() {
+func showStatus(commandline bool) {
 	for _, hardenSubject := range allHardenSubjects {
 		if hardenSubject.IsHardened() {
 			eventText := fmt.Sprintf("%s is now hardened\r\n", hardenSubject.Name())
-			ShowIsHardened(hardenSubject.Name())
+			if !commandline {
+				ShowIsHardened(hardenSubject.Name())
+			}
 			Info.Print(eventText)
 		} else {
 			eventText := fmt.Sprintf("%s is now NOT hardened\r\n", hardenSubject.Name())
-			ShowNotHardened(hardenSubject.Name())
+			if !commandline {
+				ShowNotHardened(hardenSubject.Name())
+			}
 			Info.Print(eventText)
 		}
 	}
 }
 
-// main method for hardentools
+// Main method for hardentools.
 func main() {
 	// parse command line parameters/flags
-	flag.String("log-level", defaultLogLevel, "Info|Trace: enables logging with verbosity; Off: disables logging")
+	logLevelPtr := flag.String("log-level", defaultLogLevel, "\"Info\": Enables logging with standard verbosity; \"Trace\": Verbose logging; \"Off\": Disables logging")
+	restorePtr := flag.Bool("restore", false, "restore without GUI (command line only)")
+	hardenPtr := flag.Bool("harden", false, "harden without GUI, only default settings (command line only)")
 	flag.Parse()
-	flag.VisitAll(func(f *flag.Flag) {
-		// only supports log-level right now
-		if f.Name == "log-level" {
-			// Init logging
-			if strings.EqualFold(f.Value.String(), "Info") {
-				var logfile, err = os.Create(logpath)
-				if err != nil {
-					panic(err)
-				}
 
-				initLogging(ioutil.Discard, logfile)
-			} else if strings.EqualFold(f.Value.String(), "Trace") {
-				var logfile, err = os.Create(logpath)
-				if err != nil {
-					panic(err)
-				}
+	if *hardenPtr == true {
+		// no GUI, just harden with default settings
+		initLoggingWithCmdParameters(logLevelPtr, true)
+		cmdHarden()
+	}
+	if *restorePtr == true {
+		// no GUI, just restore
+		initLoggingWithCmdParameters(logLevelPtr, true)
+		cmdRestore()
+	}
 
-				initLogging(logfile, logfile)
-			} else {
-				// Off
-				initLogging(ioutil.Discard, ioutil.Discard)
-			}
-		}
-	})
+	initLoggingWithCmdParameters(logLevelPtr, false)
 
-	// init main window
+	// Init main window.
 	appl := app.New()
 	appl.Settings().SetTheme(theme.LightTheme())
 	mainWindow = appl.NewWindow("Hardentools")
 	// emptyContainer needed to get minimum window size to be able to show
-	// (elevation) dialog
+	// (elevation) dialog.
 	emptyContainer := widget.NewScrollContainer(widget.NewVBox())
 	emptyContainer.SetMinSize(fyne.NewSize(700, 300))
 	mainWindow.SetContent(emptyContainer)
-	// TODO
-	// mainWindow.SetIcon()
+	// set window icon
+	iconContent, _ := base64.StdEncoding.DecodeString(IconBase64)
+	var windowIcon = HardentoolsWindowIconStruct{
+		"HardentoolsWindowIcon",
+		iconContent,
+	}
+	mainWindow.SetIcon(windowIcon)
 
 	Trace.Println("Starting up hardentools")
 
-	go main2()
+	go mainGUI()
 
 	mainWindow.ShowAndRun()
+}
+
+func initLoggingWithCmdParameters(logLevelPtr *string, cmd bool) {
+	var logfile *os.File
+	var err error
+
+	if cmd {
+		// command line only => use stdout
+		logfile = os.Stdout
+	} else {
+		// UI => use logfile
+		logfile, err = os.Create(logPath)
+		if err != nil {
+			panic(err)
+		}
+	}
+	if strings.EqualFold(*logLevelPtr, "Info") {
+		// only standard log output
+		initLogging(ioutil.Discard, logfile)
+	} else if strings.EqualFold(*logLevelPtr, "Trace") {
+		// standard + trace logging
+		initLogging(logfile, logfile)
+	} else if strings.EqualFold(*logLevelPtr, "Off") {
+		// no logging
+		initLogging(ioutil.Discard, ioutil.Discard)
+	} else {
+		// default logging (only standard log output)
+		initLogging(ioutil.Discard, logfile)
+	}
 }
