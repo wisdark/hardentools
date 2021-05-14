@@ -1,5 +1,5 @@
 // Hardentools
-// Copyright (C) 2017-2020 Security Without Borders
+// Copyright (C) 2017-2021 Security Without Borders
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -26,13 +26,20 @@ import (
 	"os"
 	"strings"
 
-	"fyne.io/fyne"
-	"fyne.io/fyne/app"
-	"fyne.io/fyne/theme"
-	"fyne.io/fyne/widget"
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 
 	"golang.org/x/sys/windows/registry"
 )
+
+func init() {
+	// Tries to prevent DLL preloading/sideloading for dynamically loaded
+	// DLLs (loaded by fyne.io and dependencies)
+	SaferDLLLoading()
+}
 
 // allHardenSubjects contains all top level harden subjects that should
 // be considered.
@@ -48,6 +55,7 @@ var hardenSubjectsForUnprivilegedUsers = []HardenInterface{
 	AdobePDFProtectedMode,
 	AdobePDFProtectedView,
 	AdobePDFEnhancedSecurity,
+	ShowFileExt,
 }
 var hardenSubjectsForPrivilegedUsers = append(hardenSubjectsForUnprivilegedUsers, []HardenInterface{
 	Autorun,
@@ -55,7 +63,6 @@ var hardenSubjectsForPrivilegedUsers = append(hardenSubjectsForUnprivilegedUsers
 	Cmd,
 	UAC,
 	FileAssociations,
-	ShowFileExt,
 	WindowsASR,
 	LSA,
 }...)
@@ -139,7 +146,7 @@ func hardenAll() {
 		markStatus(true)
 		showStatus(false)
 
-		showEndDialog("Done!\nRisky features have been hardened!\nFor all changes to take effect please restart Windows.")
+		showEndDialog("Done! Risky features have been hardened!\nFor all changes to take effect please restart Windows.")
 		os.Exit(0)
 	}()
 }
@@ -155,7 +162,7 @@ func restoreAll() {
 		markStatus(false)
 		showStatus(false)
 
-		showEndDialog("Done!\nRestored settings to their original state.\nFor all changes to take effect please restart Windows.")
+		showEndDialog("Done! Restored settings to their original state.\nFor all changes to take effect please restart Windows.")
 		os.Exit(0)
 	}()
 }
@@ -269,7 +276,7 @@ func main() {
 	mainWindow = appl.NewWindow("Hardentools")
 	// emptyContainer needed to get minimum window size to be able to show
 	// (elevation) dialog.
-	emptyContainer := widget.NewScrollContainer(widget.NewVBox())
+	emptyContainer := container.NewVScroll(widget.NewLabel(""))
 	emptyContainer.SetMinSize(fyne.NewSize(700, 300))
 	mainWindow.SetContent(emptyContainer)
 	// set window icon

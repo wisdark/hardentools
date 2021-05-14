@@ -8,8 +8,8 @@ clean:
 
 pre: clean
 	@mkdir -p $(BUILD_FOLDER)
-	env GO111MODULE=on go get -d ./
-	env GO111MODULE=on go mod download
+	env go get -d ./
+	env go mod download
 	go get github.com/akavel/rsrc
 
 build: pre
@@ -19,9 +19,12 @@ endif
 
 	@echo "[builder] Building Windows executable"
 	@mkdir -p $(BUILD_FOLDER)/
-	$(GOPATH)/bin/rsrc -manifest harden.manifest -ico harden.ico -o rsrc.syso
+	$(GOPATH)/bin/rsrc -arch 386 -manifest harden.manifest -ico harden.ico -o rsrc.syso
 	$(FLAGS_WINDOWS) go build --ldflags '-s -w -extldflags "-static" -H windowsgui' -o $(BUILD_FOLDER)/hardentools.exe
+	@echo "[builder] Building Windows commandline executable"
+	$(FLAGS_WINDOWS) go build --ldflags '-s -w -extldflags "-static"' -o $(BUILD_FOLDER)/hardentools-cli.exe
 	@echo "[builder] Done!"
+
 
 lint:
 	@echo "[lint] Running linter on codebase"
