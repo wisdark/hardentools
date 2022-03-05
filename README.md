@@ -5,7 +5,7 @@
 [![Build Status](https://travis-ci.org/securitywithoutborders/hardentools.svg?branch=master)](https://travis-ci.org/securitywithoutborders/hardentools)
 [![Go Report Card][goreportcard-badge]][goreportcard]
 
-Hardentools is a collection of simple utilities designed to disable a number of "features" exposed by operating systems (Microsoft Windows, for now), and primary consumer applications. These features, commonly thought for enterprise customers, are generally useless to regular users and rather pose as dangers as they are very commonly abused by attackers to execute malicious code on a victim's computer. The intent of this tool is to simply reduce the attack surface by disabling the low-hanging fruit. **Hardentools is intended for individuals at risk, who might want an extra level of security at the price of *some* usability**. It is not intended for corporate environments.
+Hardentools is designed to disable a number of "features" exposed by operating systems (Microsoft Windows, for now) and some widely used applications (Microsoft Office and Adobe PDF Reader, for now). These features, commonly thought for enterprise customers, are generally useless to regular users and rather pose as dangers as they are very commonly abused by attackers to execute malicious code on a victim's computer. The intent of this tool is to simply reduce the attack surface by disabling the low-hanging fruit. **Hardentools is intended for individuals at risk, who might want an extra level of security at the price of *some* usability**. It is not intended for corporate environments.
 
 > **WARNING**: This tool disables a number of features, including of Microsoft Office, Adobe Reader, and Windows, that might cause malfunctions to certain applications. You can find a complete list of changes [here](https://github.com/securitywithoutborders/hardentools/wiki). Use this at your own risk.
 
@@ -43,17 +43,16 @@ In case you wish to restore the original settings and revert the changes Hardent
 **Please note**: the modifications made by Hardentools are exclusively contextual to the Windows user account used to run the tool from. In case you want Hardentools to change settings for other Windows users as well, you will have to run it from each one of them logged in.
 
 ## Known Issues
-### Hardentools not working in a Virtual Machine or if used with RDP
-Hardentools might not start when used on a Virtual Machine or of used via RDP. If started on the command line an error similar to the following appears:
+### Hardentools not working in a Virtual Machine, if used remotely (e.g. with RDP) or without OpenGL graphics drivers
+
+Hardentools might not start when used on a Virtual Machine, if used remotely (e.g. with RDP) or on a machine with only very basic graphic drivers (no OpenGL 2.0). If started on the command line an error similar to the following will appear in these cases:
 ```
 2020/09/06 02:24:47 Fyne error:  window creation error
 2020/09/06 02:24:47   Cause: APIUnavailable: WGL: The driver does not appear to support OpenGL
 2020/09/06 02:24:47   At: /home/travis/gopath/pkg/mod/fyne.io/fyne@v1.3.0/internal/driver/glfw/window.go:1133
 ```
 
-This is due to a bug in the UI framework used (https://github.com/fyne-io/fyne/issues/410). You can check if your VM supports an OpenGL 2.0 graphics driver and install that to get it working. We are also working on a command line interface to remediate this.
-
-In cases you get this error, you can use the hardentools-cli.exe to harden the system using the default settings with:
+This is due to a bug in the UI framework used (https://github.com/fyne-io/fyne/issues/410). You can check if your VM supports an OpenGL 2.0 graphics driver and install that to get it working. Alternatively you can use the command line version (`hardentools-cli.exe`) to harden the system using the default settings with:
 
     .\hardentools-cli.exe -harden
 

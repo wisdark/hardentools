@@ -10,9 +10,9 @@ pre: clean
 	@mkdir -p $(BUILD_FOLDER)
 	env go get -d ./
 	env go mod download
-	go get github.com/akavel/rsrc
+	go install github.com/akavel/rsrc
 
-build: pre
+build: pre lint vet
 ifndef MINGW32GCC
 	$(error "i686-w64-mingw32-gcc is not available. Please install package mingw32-cross-gcc")
 endif
@@ -22,14 +22,19 @@ endif
 	$(GOPATH)/bin/rsrc -arch 386 -manifest harden.manifest -ico harden.ico -o rsrc.syso
 	$(FLAGS_WINDOWS) go build --ldflags '-s -w -extldflags "-static" -H windowsgui' -o $(BUILD_FOLDER)/hardentools.exe
 	@echo "[builder] Building Windows commandline executable"
-	$(FLAGS_WINDOWS) go build --ldflags '-s -w -extldflags "-static"' -o $(BUILD_FOLDER)/hardentools-cli.exe
+	$(FLAGS_WINDOWS) go build -tags cli --ldflags '-s -w -extldflags "-static"' -o $(BUILD_FOLDER)/hardentools-cli.exe
 	@echo "[builder] Done!"
 
 
-lint:
+lint: fmt
 	@echo "[lint] Running linter on codebase"
 	@golint ./...
 
 fmt:
 	@echo "[gofmt] Formatting code"
 	gofmt -s -w .
+
+vet: fmt
+	@echo "[go vet] Checking code"
+	$(FLAGS_WINDOWS) go vet ./...
+

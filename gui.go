@@ -14,63 +14,12 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+//go:build !cli
+
 package main
-
-/*
-// some C code for managing elevated privileges
-#include <windows.h>
-#include <shellapi.h>
-
-// Checks if we are running with elevated privileges (admin rights).
-int IsElevated( ) {
-    boolean fRet = FALSE;
-    HANDLE hToken = NULL;
-    if( OpenProcessToken( GetCurrentProcess( ),TOKEN_QUERY,&hToken ) ) {
-        TOKEN_ELEVATION Elevation;
-        DWORD cbSize = sizeof( TOKEN_ELEVATION );
-        if( GetTokenInformation( hToken, TokenElevation, &Elevation, sizeof( Elevation ), &cbSize ) ) {
-            fRet = Elevation.TokenIsElevated;
-        }
-    }
-    if( hToken ) {
-        CloseHandle( hToken );
-    }
-    if( fRet ){
-		return 1;
-	}
-	else {
-		return 0;
-	}
-}
-
-// Executes the executable in the current directory (or in path) with "runas"
-// to aquire admin privileges.
-int ExecuteWithRunas(char execName[]){
-	SHELLEXECUTEINFO shExecInfo;
-
-	shExecInfo.cbSize = sizeof(SHELLEXECUTEINFO);
-
-	shExecInfo.fMask = 0x00008000;
-	shExecInfo.hwnd = NULL;
-	shExecInfo.lpVerb = "runas";
-	shExecInfo.lpFile = execName;
-	shExecInfo.lpParameters = NULL;
-	shExecInfo.lpDirectory = NULL;
-	shExecInfo.nShow = SW_NORMAL;
-	shExecInfo.hInstApp = NULL;
-
-	boolean success = ShellExecuteEx(&shExecInfo);
-	if (success)
-		return 1;
-	else
-		return 0;
-}
-*/
-import "C"
 
 import (
 	"errors"
-	"fmt"
 	"os"
 
 	"fyne.io/fyne/v2"
@@ -88,13 +37,10 @@ var inProgressLabel *widget.Label
 func mainGUI() {
 	// Check if hardentools has been started with elevated rights. If not
 	// ask user if she wants to elevate.
-	if C.IsElevated() == 0 {
+	elevationStatus := isElevated()
+	if elevationStatus == false {
 		// Main window must already be open for this dialog to work.
 		askElevationDialog()
-	}
-	elevationStatus := false
-	if C.IsElevated() == 1 {
-		elevationStatus = true
 	}
 
 	// Show splash screen since loading takes some time (at least with admin
@@ -206,12 +152,13 @@ func createMainGUIContent(elevationStatus bool) {
 	hardenButton.SetIcon(theme.ConfirmIcon())
 
 	introText := widget.NewLabelWithStyle("Hardentools is designed to disable a number of \"features\" exposed by Microsoft\n"+
-		"Windows and is primary a consumer application. These features, commonly thought\n"+
-		"for enterprise customers, are generally useless to regular users and rather\n"+
-		"pose as dangers as they are very commonly abused by attackers to execute\n"+
-		"malicious code on a victim's computer. The intent of this tool is to simply\n"+
-		"reduce the attack surface by disabling the low-hanging fruit. Hardentools is\n"+
-		"intended for individuals at risk, who might want an extra level of security\n"+
+		"Windows and some widely used applications (Microsoft Office and Adobe PDF Reader,\n"+
+		"for now). These features, commonly thought for enterprise customers,\n"+
+		"are generally useless to regular users and rather pose as dangers as\n"+
+		"they are very commonly abused by attackers to execute malicious code\n"+
+		"on a victim's computer. The intent of this tool is to simply reduce\n"+
+		"the attack surface by disabling the low-hanging fruit. Hardentools is\n"+
+		"for individuals at risk, who might want an extra level of security intended\n"+
 		"at the price of some usability. It is not intended for corporate environments.\n",
 		fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 
@@ -321,7 +268,7 @@ func restartWithElevatedPrivileges() {
 	progName := os.Args[0]
 
 	// Start us again, this time with elevated privileges.
-	if C.ExecuteWithRunas(C.CString(progName)) == 1 {
+	if startWithElevatedPrivs(progName) {
 		// Exit this instance (the unprivileged one).
 		os.Exit(0)
 	} else {
@@ -433,52 +380,62 @@ func cmdRestore() {
 	os.Exit(0)
 }
 
-func cmdHardenRestore(harden bool) {
-	// check if hardentools has been started with elevated rights.
-	elevationStatus := false
-	if C.IsElevated() == 1 {
-		elevationStatus = true
-		Info.Println("Started with elevated rights")
-	} else {
-		Info.Println("Started without elevated rights")
-	}
+// hardenAll starts harden procedure.
+func hardenAll() {
+	showEventsTextArea()
 
-	// check if we are running with elevated rights
-	if elevationStatus == false {
-		allHardenSubjects = hardenSubjectsForUnprivilegedUsers
-	} else {
-		allHardenSubjects = hardenSubjectsForPrivilegedUsers
-	}
+	// Use goroutine to allow gui to update window.
+	go func() {
+		triggerAll(true)
+		markStatus(true)
+		showStatus()
 
-	// check hardening status
-	status := checkStatus()
-	if status == false && harden == false {
-		fmt.Println("Not hardened. Please harden before restoring.")
-		os.Exit(-1)
-	} else if status == true && harden == true {
-		fmt.Println("Already hardened. Please restore before hardening again.")
-		os.Exit(-1)
-	}
+		showEndDialog("Done! Risky features have been hardened!\nFor all changes to take effect please restart Windows.")
+		os.Exit(0)
+	}()
+}
 
-	// build up expert settings checkboxes and map
-	expertConfig = make(map[string]bool)
-	for _, hardenSubject := range allHardenSubjects {
-		var subjectIsHardened = hardenSubject.IsHardened()
-		//var enableField bool
+// RestoreAll starts restore procedure.
+func restoreAll() {
+	showEventsTextArea()
 
-		if status == false {
-			// harden only settings which are not hardened yet
-			expertConfig[hardenSubject.Name()] = !subjectIsHardened && hardenSubject.HardenByDefault()
-		} else {
-			// restore only hardened settings
-			expertConfig[hardenSubject.Name()] = subjectIsHardened
-		}
-	}
+	// Use goroutine to allow gui to update window.
+	go func() {
+		triggerAll(false)
+		restoreSavedRegistryKeys() // TODO: add error handling/visibility to user
+		markStatus(false)
+		showStatus()
 
-	triggerAll(harden)
-	if !harden {
+		showEndDialog("Done! Restored settings to their original state.\nFor all changes to take effect please restart Windows.")
+		os.Exit(0)
+	}()
+}
+
+// hardenDefaultsAgain restores the original settings and
+// hardens using the default settings (no custom settings apply).
+func hardenDefaultsAgain() {
+	showEventsTextArea()
+
+	// Use goroutine to allow gui to update window.
+	go func() {
+		// Restore hardened settings.
+		triggerAll(false)
 		restoreSavedRegistryKeys()
-	}
-	markStatus(harden)
-	showStatus(true)
+		markStatus(false)
+
+		// Reset expertConfig (is set to currently already hardened settings
+		// in case of restore).
+		expertConfig = make(map[string]bool)
+		for _, hardenSubject := range allHardenSubjects {
+			expertConfig[hardenSubject.Name()] = hardenSubject.HardenByDefault()
+		}
+
+		// Harden all settings.
+		triggerAll(true)
+		markStatus(true)
+		showStatus()
+
+		showEndDialog("Done!\nRisky features have been hardened!\nFor all changes to take effect please restart Windows.")
+		os.Exit(0)
+	}()
 }
